@@ -44,3 +44,5 @@ router.post('/register', authLimiter, registerValidator, register)
 router.post('/login', authLimiter, loginValidator, login)
 router.post('/refresh', refresh)
 router.post('/logout', logout)
+
+module.exports = router

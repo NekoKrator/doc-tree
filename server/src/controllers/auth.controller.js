@@ -6,7 +6,6 @@ const {
     generateRefreshToken,
     verifyRefreshToken,
 } = require('../utils/tokenUtils')
-const User = require('../models/User')
 
 const register = async (req, res, next) => {
     try {
@@ -18,31 +17,32 @@ const register = async (req, res, next) => {
         const { username, email, password } = req.body
 
         const existingUser = await User.findOne({
-            $or: [{ email: req.body.email }, { username: req.body.username }],
-        }).selected('+refreshToken')
+            $or: [{ email }, { username }],
+        }).select('+refreshToken')
 
         if (existingUser) {
             const field = existingUser.email === email ? 'email' : 'username'
-            return res.status(400).json({
-                message: `${field} is already taken`,
+            return res.status(409).json({
+                success: false,
+                error: `${field} is already taken`,
             })
         }
 
         const hashedPassword = await bcrypt.hash(password, 10)
-        const User = new User({
+        const newUser = new User({
             username,
             email,
             password: hashedPassword,
         })
 
-        await User.save()
+        await newUser.save()
 
-        const accessToken = generateAccessToken(User._id)
-        const refreshToken = generateRefreshToken(User._id)
+        const accessToken = generateAccessToken(newUser._id)
+        const refreshToken = generateRefreshToken(newUser._id)
 
-        user.refreshToken = refreshToken
-        user.refreshTokenExp = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-        await user.save()
+        newUser.refreshToken = await bcrypt.hash(refreshToken, 10)
+        newUser.refreshTokenExp = Date.now() + 7 * 24 * 60 * 60 * 1000
+        await newUser.save()
 
         res.cookie('accessToken', accessToken, {
             httpOnly: true,
@@ -59,10 +59,11 @@ const register = async (req, res, next) => {
         })
 
         res.status(201).json({
+            success: true,
             user: {
-                _id: User._id,
-                username: User.username,
-                email: User.email,
+                _id: newUser._id,
+                username: newUser.username,
+                email: newUser.email,
             },
         })
     } catch (err) {
@@ -79,20 +80,27 @@ const login = async (req, res, next) => {
 
         const { email, password } = req.body
 
-        const User = await User.findOne({ email }).select(
-            '+password +refreshToken'
+        const user = await User.findOne({ email }).select(
+            '+password +refreshToken +refreshTokenExp'
         )
-        if (!User) {
-            return res.status(401).json({ message: 'Invalid credentials' })
+
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid credentials',
+            })
         }
 
-        const isMatch = await bcrypt.compare(password, User.password)
+        const isMatch = await bcrypt.compare(password, user.password)
         if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid credentials' })
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid credentials',
+            })
         }
 
-        const accessToken = generateAccessToken(User._id)
-        const refreshToken = generateRefreshToken(User._id)
+        const accessToken = generateAccessToken(user._id)
+        const refreshToken = generateRefreshToken(user._id)
 
         user.refreshToken = await bcrypt.hash(refreshToken, 10)
         user.refreshTokenExp = Date.now() + 7 * 24 * 60 * 60 * 1000
@@ -113,10 +121,11 @@ const login = async (req, res, next) => {
         })
 
         res.json({
+            success: true,
             user: {
-                _id: User._id,
-                username: User.username,
-                email: User.email,
+                _id: user._id,
+                username: user.username,
+                email: user.email,
             },
         })
     } catch (err) {
@@ -128,7 +137,10 @@ const refresh = async (req, res, next) => {
     try {
         const { refreshToken } = req.cookies
         if (!refreshToken) {
-            return res.status(401).json({ message: 'Unauthorized' })
+            return res.status(401).json({
+                success: false,
+                error: 'Authorization required',
+            })
         }
 
         const decoded = verifyRefreshToken(refreshToken)
@@ -136,13 +148,26 @@ const refresh = async (req, res, next) => {
             '+refreshToken +refreshTokenExp'
         )
 
-        if (!user || user.refreshToken !== refreshToken) {
-            return res.status(401).json({ message: 'Unauthorized' })
+        if (
+            !user ||
+            !user.refreshTokenExp ||
+            Date.now() > user.refreshTokenExp
+        ) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid token',
+            })
         }
 
-        const tokenMatch = await bcrypt.compare(refreshToken, user.refreshToken)
-        if (!tokenMatch) {
-            return res.status(401).json({ message: 'Unauthorized' })
+        const isTokenValid = await bcrypt.compare(
+            refreshToken,
+            user.refreshToken
+        )
+        if (!isTokenValid) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid token',
+            })
         }
 
         const newAccessToken = generateAccessToken(user._id)
@@ -150,6 +175,7 @@ const refresh = async (req, res, next) => {
 
         user.refreshToken = await bcrypt.hash(newRefreshToken, 10)
         user.refreshTokenExp = Date.now() + 7 * 24 * 60 * 60 * 1000
+        await user.save()
 
         res.cookie('accessToken', newAccessToken, {
             httpOnly: true,
@@ -164,6 +190,8 @@ const refresh = async (req, res, next) => {
             sameSite: 'Strict',
             maxAge: 7 * 24 * 60 * 60 * 1000,
         })
+
+        res.json({ success: true })
     } catch (err) {
         next(err)
     }
@@ -172,8 +200,9 @@ const refresh = async (req, res, next) => {
 const logout = async (req, res, next) => {
     try {
         const user = await User.findById(req.user._id)
-        user.refreshToken = 'undefined'
-        user.refreshTokenExp = 'undefined'
+
+        user.refreshToken = undefined
+        user.refreshTokenExp = undefined
         await user.save()
 
         res.clearCookie('accessToken')
