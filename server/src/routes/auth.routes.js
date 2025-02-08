@@ -7,14 +7,9 @@ const {
     refresh,
     logout,
 } = require('../controllers/auth.controller')
+const authLimiter = require('../middlewares/rateLimiter')
 
 const router = Router()
-
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15m
-    max: 5,
-    message: 'Too many attemps, please try again later',
-})
 
 const registerValidator = [
     body('username')
@@ -43,6 +38,6 @@ const loginValidator = [
 router.post('/register', authLimiter, registerValidator, register)
 router.post('/login', authLimiter, loginValidator, login)
 router.post('/refresh', refresh)
-router.post('/logout', logout)
+router.post('/logout', authMiddleware, logout)
 
 module.exports = router

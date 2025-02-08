@@ -5,13 +5,17 @@ const {
     generateAccessToken,
     generateRefreshToken,
     verifyRefreshToken,
+    verifyAccessToken,
 } = require('../utils/tokenUtils')
 
 const register = async (req, res, next) => {
     try {
         const errors = validationResult(req)
         if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() })
+            const error = new Error('Validation failed')
+            error.statusCode = 400
+            error.errors = errors.array()
+            throw error
         }
 
         const { username, email, password } = req.body
@@ -22,10 +26,9 @@ const register = async (req, res, next) => {
 
         if (existingUser) {
             const field = existingUser.email === email ? 'email' : 'username'
-            return res.status(409).json({
-                success: false,
-                error: `${field} is already taken`,
-            })
+            const error = new Error(`${field} is already taken`)
+            error.statusCode = 409
+            throw error
         }
 
         const hashedPassword = await bcrypt.hash(password, 10)
@@ -75,7 +78,10 @@ const login = async (req, res, next) => {
     try {
         const errors = validationResult(req)
         if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() })
+            const error = new Error('Validation failed')
+            error.statusCode = 400
+            error.errors = errors.array()
+            throw error
         }
 
         const { email, password } = req.body
@@ -85,18 +91,17 @@ const login = async (req, res, next) => {
         )
 
         if (!user) {
-            return res.status(401).json({
-                success: false,
-                error: 'Invalid credentials',
-            })
+            const error = new Error('Invalid credentials')
+            error.statusCode = 401
+            throw error
         }
 
         const isMatch = await bcrypt.compare(password, user.password)
+
         if (!isMatch) {
-            return res.status(401).json({
-                success: false,
-                error: 'Invalid credentials',
-            })
+            const error = new Error('Invalid credentials')
+            error.statusCode = 401
+            throw error
         }
 
         const accessToken = generateAccessToken(user._id)
@@ -137,10 +142,9 @@ const refresh = async (req, res, next) => {
     try {
         const { refreshToken } = req.cookies
         if (!refreshToken) {
-            return res.status(401).json({
-                success: false,
-                error: 'Authorization required',
-            })
+            const error = new Error('Authorization required')
+            error.statusCode = 401
+            throw error
         }
 
         const decoded = verifyRefreshToken(refreshToken)
@@ -153,10 +157,9 @@ const refresh = async (req, res, next) => {
             !user.refreshTokenExp ||
             Date.now() > user.refreshTokenExp
         ) {
-            return res.status(401).json({
-                success: false,
-                error: 'Invalid token',
-            })
+            const error = new Error('Invalid token')
+            error.statusCode = 401
+            throw error
         }
 
         const isTokenValid = await bcrypt.compare(
@@ -214,4 +217,30 @@ const logout = async (req, res, next) => {
     }
 }
 
-module.exports = { register, login, refresh, logout }
+const me = async (req, res, next) => {
+    try {
+        const { accessToken } = req.cookies
+        if (!accessToken) {
+            const error = new Error('Authorization required')
+            error.statusCode = 401
+            throw error
+        }
+
+        const decoded = verifyAccessToken(accessToken)
+        const user = await User.findById(decoded.userId).select(
+            '-password -refreshToken'
+        )
+
+        if (!user) {
+            const error = new Error('User not found')
+            error.statusCode = 404
+            throw error
+        }
+
+        res.json({ success: true, user })
+    } catch (err) {
+        next(err)
+    }
+}
+
+module.exports = { register, login, refresh, logout, me }
